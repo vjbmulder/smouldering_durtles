@@ -1,0 +1,61 @@
+name: Build APK
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Apply the writing-practice changes
+        run: |
+          z=$(find . -path ./.git -prune -o -type f -name 'writing-patch*.zip' -print | head -1)
+          if [ -n "$z" ]; then echo "Applying $z"; unzip -o "$z" -d . ; else echo "::warning::writing-patch.zip not found; building the app unchanged"; fi
+          git status --short | head -50
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Use the fixed signing key (so updates install over the old version)
+        run: |
+          mkdir -p ~/.android
+          if [ -f tools/signing.keystore.b64 ]; then base64 -d tools/signing.keystore.b64 > ~/.android/debug.keystore; fi
+
+      - name: Build APK
+        run: |
+          chmod +x gradlew
+          set -o pipefail
+          ./gradlew assembleRelease --no-daemon --stacktrace 2>&1 | tee build.log
+          cp app/build/outputs/apk/release/*.apk durtles-writing.apk
+
+      - name: Save the build log for Claude
+        if: always()
+        run: |
+          git config user.name "build bot"; git config user.email "bot@users.noreply.github.com"
+          mkdir -p /tmp/logs && cp build.log /tmp/logs/build-${{ github.run_number }}.log 2>/dev/null || echo "no log" > /tmp/logs/build-${{ github.run_number }}.log
+          echo "${{ job.status }}" > /tmp/logs/status-${{ github.run_number }}.txt
+          git stash -u >/dev/null 2>&1 || true
+          git fetch origin ci-logs || true
+          if git rev-parse --verify origin/ci-logs >/dev/null 2>&1; then git checkout -B ci-logs origin/ci-logs; else git checkout --orphan ci-logs; git rm -rf . >/dev/null 2>&1 || true; fi
+          git clean -fdx >/dev/null 2>&1 || true
+          cp /tmp/logs/* .
+          tail -c 400000 build-${{ github.run_number }}.log > tmp && mv tmp build-${{ github.run_number }}.log
+          git add build-*.log status-*.txt && git commit -m "Build log ${{ github.run_number }}" && git push origin ci-logs
+
+      - name: Publish release
+        if: success()
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: Durtles Writing build ${{ github.run_number }}
+          files: durtles-writing.apk
+          body: Open this page on your Android device and tap durtles-writing.apk to install or update.
