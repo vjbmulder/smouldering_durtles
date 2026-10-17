@@ -1,4 +1,4 @@
-ame: Build APK
+name: Build APK
 
 on:
   push:
@@ -40,13 +40,20 @@ jobs:
 
       - name: Save the build log for Claude
         if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN: ${{ github.run_number }}
+          STATUS: ${{ job.status }}
         run: |
-          git config --global user.name "build bot"; git config --global user.email "bot@users.noreply.github.com"
-          n=${{ github.run_number }}
-          cp "$RUNNER_TEMP/build.log" "$RUNNER_TEMP/build-$n.log" 2>/dev/null || echo "no log" > "$RUNNER_TEMP/build-$n.log"
-          tail -c 400000 "$RUNNER_TEMP/build-$n.log" > "$RUNNER_TEMP/b" && mv "$RUNNER_TEMP/b" "$RUNNER_TEMP/build-$n.log"
-          echo "${{ job.status }}" > "$RUNNER_TEMP/status-$n.txt"
-          L="$RUNNER_TEMP/logs"; rm -rf "$L"
-          if git fetch origin ci-logs 2>/dev/null; then git worktree add "$L" FETCH_HEAD; cd "$L"; git checkout -B ci-logs; else git worktree add --detach "$L"; cd "$L"; git checkout --orphan ci-logs; git rm -rf -q . || true; fi
-          cp "$RUNNER_TEMP/build-$n.log" "$RUNNER_TEMP/status-$n.txt" .
-          git add "build-$n.log" "status-$n.txt" && git commit -q -m "Build log $n" && git push origin ci-logs
+          cd "$RUNNER_TEMP"
+          [ -f build.log ] || echo "The build step did not run or produced no output." > build.log
+          tail -c 400000 build.log > "build-$RUN.log"
+          echo "$STATUS" > "status-$RUN.txt"
+          url="https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git"
+          rm -rf logs
+          if git clone -q --depth 1 --branch ci-logs "$url" logs; then cd logs; else mkdir logs; cd logs; git init -q; git checkout -q -b ci-logs; git remote add origin "$url"; fi
+          cp "../build-$RUN.log" "../status-$RUN.txt" .
+          git add "build-$RUN.log" "status-$RUN.txt"
+          git -c user.name="build bot" -c user.email="bot@users.noreply.github.com" commit -q -m "Build log $RUN"
+          git push -q origin ci-logs
